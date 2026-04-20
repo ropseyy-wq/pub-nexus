@@ -17,16 +17,8 @@
       "required": true
     },
     "SERVER_PORT": {
-      "description": "Server port",
-      "value": "25565"
-    },
-    "AUTH_TYPE": {
-      "description": "Authentication type",
-      "value": "offline"
-    },
-    "PASSWORD": {
-      "description": "Microsoft password (if using Microsoft auth)",
-      "required": false
+      "value": "25565",
+      "description": "Server port"
     },
     "BOT_MODES": {
       "description": "Comma-separated modes: FARM,MINE,PARKOUR,LIQUID_WALKER",
