@@ -7,8 +7,7 @@ const config = {
     username: process.env.BOT_NAME || 'NexusBot',
     serverIp: process.env.SERVER_IP || 'localhost',
     serverPort: parseInt(process.env.SERVER_PORT) || 25565,
-    auth: process.env.AUTH_TYPE || 'offline',
-    password: process.env.PASSWORD || '',
+    auth: 'offline',
     modes: (process.env.BOT_MODES || '').split(',')
 };
 
