@@ -6,5 +6,31 @@
     "startCommand": "node bot.js",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
+  },
+  "variables": {
+    "BOT_NAME": {
+      "description": "Name of your Minecraft bot",
+      "required": true
+    },
+    "SERVER_IP": {
+      "description": "Minecraft server IP address",
+      "required": true
+    },
+    "SERVER_PORT": {
+      "description": "Server port",
+      "value": "25565"
+    },
+    "AUTH_TYPE": {
+      "description": "Authentication type",
+      "value": "offline"
+    },
+    "PASSWORD": {
+      "description": "Microsoft password (if using Microsoft auth)",
+      "required": false
+    },
+    "BOT_MODES": {
+      "description": "Comma-separated modes: FARM,MINE,PARKOUR,LIQUID_WALKER",
+      "required": true
+    }
   }
 }
