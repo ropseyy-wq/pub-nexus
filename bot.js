@@ -31,6 +31,7 @@ function addLog(message, type = 'info') {
     console.log(message);
 }
 
+// Start API server FIRST (always runs even if bot fails)
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -45,7 +46,12 @@ app.get('/health', (req, res) => {
         ping: botStats.ping,
         players: botStats.players,
         inventory: botStats.inventory,
-        blocksMined: botStats.blocksMined
+        blocksMined: botStats.blocksMined,
+        config: {
+            serverIp: config.serverIp,
+            serverPort: config.serverPort,
+            username: config.username
+        }
     });
 });
 
@@ -65,70 +71,106 @@ app.post('/command', (req, res) => {
     }
 });
 
-const PORT = process.env.API_PORT || 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     addLog(`[API] Server running on port ${PORT}`);
 });
 
-const bot = mineflayer.createBot({
-    host: config.serverIp,
-    port: config.serverPort,
-    username: config.username,
-    auth: config.auth,
-    password: config.password
-});
+// Create bot function
+let bot = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 3;
 
-setInterval(() => {
-    if (bot && bot.entity) {
-        botStats.position = {
-            x: Math.round(bot.entity.position.x * 10) / 10,
-            y: Math.round(bot.entity.position.y * 10) / 10,
-            z: Math.round(bot.entity.position.z * 10) / 10
-        };
-        botStats.ping = bot.player?.ping || 0;
+function createBot() {
+    if (!config.serverIp || config.serverIp === 'localhost' || config.serverIp === 'mc.example.com') {
+        addLog(`⚠️ Invalid server IP: ${config.serverIp}. Please set SERVER_IP environment variable.`, 'warning');
+        botStats.connected = false;
+        return;
     }
-}, 2000);
+    
+    addLog(`🤖 Bot connecting to ${config.serverIp}:${config.serverPort}...`, 'info');
+    
+    bot = mineflayer.createBot({
+        host: config.serverIp,
+        port: config.serverPort,
+        username: config.username,
+        auth: config.auth
+    });
 
-bot.on('health', () => {
-    botStats.health = bot.health;
-    botStats.food = bot.food;
-});
+    bot.on('connect', () => {
+        addLog(`✅ Connected to ${config.serverIp}:${config.serverPort}`, 'success');
+        reconnectAttempts = 0;
+    });
 
-bot.on('playerJoined', () => updatePlayerList());
-bot.on('playerLeft', () => updatePlayerList());
+    bot.on('spawn', () => {
+        botStats.connected = true;
+        botStats.startTime = Date.now();
+        addLog('✅ Bot has joined the server!', 'success');
+        updatePlayerList();
+        
+        if (config.modes.includes('FARM')) startFarming();
+        if (config.modes.includes('MINE')) startMining();
+        if (config.modes.includes('PARKOUR')) startParkour();
+        if (config.modes.includes('LIQUID_WALKER')) startLiquidWalker();
+    });
+
+    bot.on('health', () => {
+        botStats.health = bot.health;
+        botStats.food = bot.food;
+    });
+
+    setInterval(() => {
+        if (bot && bot.entity) {
+            botStats.position = {
+                x: Math.round(bot.entity.position.x * 10) / 10,
+                y: Math.round(bot.entity.position.y * 10) / 10,
+                z: Math.round(bot.entity.position.z * 10) / 10
+            };
+            botStats.ping = bot.player?.ping || 0;
+        }
+    }, 2000);
+
+    bot.on('playerJoined', () => updatePlayerList());
+    bot.on('playerLeft', () => updatePlayerList());
+
+    bot.on('end', (reason) => {
+        botStats.connected = false;
+        addLog(`❌ Disconnected: ${reason || 'Unknown'}`, 'error');
+        
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            reconnectAttempts++;
+            addLog(`🔄 Reconnecting in 15 seconds... (Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, 'warning');
+            setTimeout(() => {
+                if (bot) bot = null;
+                createBot();
+            }, 15000);
+        } else {
+            addLog(`❌ Max reconnection attempts reached. Bot stopped.`, 'error');
+        }
+    });
+
+    bot.on('error', (err) => {
+        addLog(`⚠️ Error: ${err.message}`, 'error');
+        botStats.connected = false;
+    });
+
+    bot.on('kicked', (reason) => {
+        addLog(`👢 Kicked: ${reason}`, 'error');
+        botStats.connected = false;
+    });
+}
 
 function updatePlayerList() {
-    if (bot.players) {
+    if (bot && bot.players) {
         botStats.players = Object.values(bot.players)
             .filter(p => p.username !== bot.username)
             .map(p => ({ username: p.username, ping: p.ping }));
     }
 }
 
-bot.on('inventory', () => {
-    if (bot.inventory && bot.inventory.slots) {
-        botStats.inventory = bot.inventory.slots.slice(36, 45).map((item, i) => {
-            if (!item) return null;
-            return { slot: i, name: item.name, displayName: item.displayName || item.name, count: item.count };
-        }).filter(i => i !== null);
-    }
-});
-
-bot.once('spawn', () => {
-    botStats.connected = true;
-    botStats.startTime = Date.now();
-    addLog('✅ Bot has joined the server!', 'success');
-    updatePlayerList();
-    
-    if (config.modes.includes('FARM')) startFarming();
-    if (config.modes.includes('MINE')) startMining();
-    if (config.modes.includes('PARKOUR')) startParkour();
-    if (config.modes.includes('LIQUID_WALKER')) startLiquidWalker();
-});
-
 function startFarming() {
     setInterval(() => {
-        if (!bot.entity || !botStats.connected) return;
+        if (!bot || !bot.entity || !botStats.connected) return;
         const crop = bot.findBlock({
             matching: (block) => ['wheat', 'carrots', 'potatoes', 'beetroots'].includes(block.name),
             maxDistance: 5
@@ -138,13 +180,6 @@ function startFarming() {
                 if (!err) {
                     botStats.blocksMined++;
                     addLog(`🌾 Farmed ${crop.name}`, 'success');
-                    const seed = bot.inventory.findInventoryItem(item => 
-                        item.name.includes('seeds') || item.name.includes('potato') || item.name.includes('carrot')
-                    );
-                    if (seed) {
-                        bot.equip(seed, 'hand');
-                        bot.placeBlock(crop.position, () => {});
-                    }
                 }
             });
         }
@@ -154,7 +189,7 @@ function startFarming() {
 function startMining() {
     const ores = ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'emerald_ore', 'copper_ore'];
     setInterval(() => {
-        if (!bot.entity || !botStats.connected) return;
+        if (!bot || !bot.entity || !botStats.connected) return;
         const ore = bot.findBlock({ matching: (block) => ores.includes(block.name), maxDistance: 5 });
         if (ore) {
             bot.dig(ore, (err) => {
@@ -169,7 +204,7 @@ function startMining() {
 
 function startParkour() {
     setInterval(() => {
-        if (!bot.entity || !botStats.connected) return;
+        if (!bot || !bot.entity || !botStats.connected) return;
         bot.setControlState('forward', true);
         bot.setControlState('jump', true);
         setTimeout(() => bot.setControlState('jump', false), 500);
@@ -178,7 +213,7 @@ function startParkour() {
 
 function startLiquidWalker() {
     setInterval(() => {
-        if (!bot.entity || !botStats.connected) return;
+        if (!bot || !bot.entity || !botStats.connected) return;
         const blockBelow = bot.blockAt(bot.entity.position.offset(0, -1, 0));
         if (blockBelow && (blockBelow.name === 'water' || blockBelow.name === 'lava')) {
             const cobble = bot.inventory.findInventoryItem(item => item.name === 'cobblestone');
@@ -190,25 +225,10 @@ function startLiquidWalker() {
     }, 1000);
 }
 
-setInterval(() => {
-    if (!bot.entity || !botStats.connected) return;
-    const random = Math.random();
-    if (random < 0.3) {
-        bot.setControlState('forward', true);
-        setTimeout(() => bot.setControlState('forward', false), 1000);
-    }
-    if (random > 0.7) {
-        bot.look(Math.random() * Math.PI * 2, Math.random() - 0.5);
-    }
-}, 15000);
+// Start the bot
+addLog(`Starting NexusBot...`, 'info');
+addLog(`Target: ${config.serverIp}:${config.serverPort}`, 'info');
+addLog(`Username: ${config.username}`, 'info');
+addLog(`Modes: ${config.modes.join(', ') || 'None'}`, 'info');
 
-bot.on('end', (reason) => {
-    botStats.connected = false;
-    addLog(`❌ Disconnected: ${reason || 'Unknown'}`, 'error');
-    setTimeout(() => process.exit(1), 10000);
-});
-
-bot.on('error', (err) => addLog(`⚠️ Error: ${err.message}`, 'error'));
-bot.on('kicked', (reason) => addLog(`👢 Kicked: ${reason}`, 'error'));
-
-addLog('🤖 Bot is connecting to server...');
+createBot();
