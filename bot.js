@@ -1,22 +1,24 @@
-// NEXUSBOT - Minecraft Bot with API Server (Full Control Version)
+// NEXUSBOT - Minecraft Bot with API Server
 const mineflayer = require('mineflayer');
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 
-// Bot configuration with defaults
+// Bot configuration - ALL MODES START OFF (controlled via API)
 let config = {
     username: process.env.BOT_NAME || 'NexusBot',
     serverIp: process.env.SERVER_IP || 'localhost',
     serverPort: parseInt(process.env.SERVER_PORT) || 25565,
     auth: 'offline',
-    modes: (process.env.BOT_MODES || '').split(',').filter(m => m && m.trim()),
-    // Dynamic settings (can be changed via API)
+    // All features start disabled - can be toggled via API
     autoReconnect: true,
     antiAFK: true,
     autoFarm: false,
     autoMine: false,
+    pvp: false,
     parkour: false,
     liquidWalker: false,
+    autoResponder: false,
     chatResponses: {
         'hello': 'Hi there!',
         'how are you': 'I am a bot, but I am doing great!',
@@ -46,7 +48,7 @@ function addLog(message, type = 'info') {
     const logEntry = { timestamp: new Date().toISOString(), message, type };
     botStats.logs.push(logEntry);
     if (botStats.logs.length > 200) botStats.logs.shift();
-    console.log(`[${type.toUpperCase()}] ${message}`);
+    console.log(message);
 }
 
 function clearIntervals() {
@@ -76,21 +78,13 @@ app.get('/health', (req, res) => {
         ping: botStats.ping,
         players: botStats.players,
         inventory: botStats.inventory,
-        blocksMined: botStats.blocksMined,
-        config: {
-            autoReconnect: config.autoReconnect,
-            antiAFK: config.antiAFK,
-            autoFarm: config.autoFarm,
-            autoMine: config.autoMine,
-            parkour: config.parkour,
-            liquidWalker: config.liquidWalker
-        }
+        blocksMined: botStats.blocksMined
     });
 });
 
 // Logs endpoint
 app.get('/logs', (req, res) => {
-    res.json(botStats.logs.slice(-100));
+    res.json(botStats.logs.slice(-150));
 });
 
 // Get all settings
@@ -100,38 +94,34 @@ app.get('/api/settings', (req, res) => {
         antiAFK: config.antiAFK,
         autoFarm: config.autoFarm,
         autoMine: config.autoMine,
+        pvp: config.pvp,
         parkour: config.parkour,
         liquidWalker: config.liquidWalker,
+        autoResponder: config.autoResponder,
         chatResponses: config.chatResponses
     });
 });
 
 // Update settings
 app.post('/api/settings', (req, res) => {
-    const { autoReconnect, antiAFK, autoFarm, autoMine, parkour, liquidWalker } = req.body;
+    const { autoReconnect, antiAFK, autoFarm, autoMine, pvp, parkour, liquidWalker, autoResponder } = req.body;
     
     if (autoReconnect !== undefined) config.autoReconnect = autoReconnect;
     if (antiAFK !== undefined) config.antiAFK = antiAFK;
     if (autoFarm !== undefined) config.autoFarm = autoFarm;
     if (autoMine !== undefined) config.autoMine = autoMine;
+    if (pvp !== undefined) config.pvp = pvp;
     if (parkour !== undefined) config.parkour = parkour;
     if (liquidWalker !== undefined) config.liquidWalker = liquidWalker;
+    if (autoResponder !== undefined) config.autoResponder = autoResponder;
     
     addLog(`Settings updated via API`, 'success');
     
-    // Restart features based on new settings
     if (bot && botStats.connected) {
         restartFeatures();
     }
     
-    res.json({ success: true, config: { 
-        autoReconnect: config.autoReconnect, 
-        antiAFK: config.antiAFK, 
-        autoFarm: config.autoFarm, 
-        autoMine: config.autoMine, 
-        parkour: config.parkour, 
-        liquidWalker: config.liquidWalker 
-    }});
+    res.json({ success: true });
 });
 
 // Update chat responses
@@ -141,10 +131,10 @@ app.post('/api/chat', (req, res) => {
         config.chatResponses = { ...config.chatResponses, ...responses };
         addLog(`Chat responses updated: ${Object.keys(responses).length} rules`, 'success');
     }
-    res.json({ success: true, chatResponses: config.chatResponses });
+    res.json({ success: true });
 });
 
-// Command endpoint (for bot controls)
+// Command endpoint
 app.post('/command', (req, res) => {
     const { command } = req.body;
     if (!command) return res.status(400).json({ error: 'No command' });
@@ -153,23 +143,20 @@ app.post('/command', (req, res) => {
     
     if (command === 'start') {
         if (!botStats.connected && bot) {
-            addLog('Attempting to start bot...', 'info');
             createBot();
         }
-        res.json({ success: true, message: 'Start command received' });
+        res.json({ success: true });
     } 
     else if (command === 'stop') {
         if (bot) {
-            addLog('Stopping bot...', 'warning');
             clearIntervals();
             bot.end();
             bot = null;
             botStats.connected = false;
         }
-        res.json({ success: true, message: 'Stop command received' });
+        res.json({ success: true });
     }
     else if (command === 'restart') {
-        addLog('Restarting bot...', 'info');
         if (bot) {
             clearIntervals();
             bot.end();
@@ -178,12 +165,12 @@ app.post('/command', (req, res) => {
         botStats.connected = false;
         reconnectAttempts = 0;
         setTimeout(() => createBot(), 3000);
-        res.json({ success: true, message: 'Restart command received' });
+        res.json({ success: true });
     }
     else {
         if (bot && botStats.connected) {
             bot.chat(command);
-            res.json({ success: true, message: 'Command sent to chat' });
+            res.json({ success: true });
         } else {
             res.status(503).json({ error: 'Bot not connected' });
         }
@@ -195,7 +182,7 @@ app.listen(PORT, '0.0.0.0', () => {
     addLog(`[API] Server running on port ${PORT}`);
 });
 
-// Bot functions
+// Bot features
 function restartFeatures() {
     clearIntervals();
     
@@ -204,6 +191,7 @@ function restartFeatures() {
     if (config.parkour) startParkour();
     if (config.liquidWalker) startLiquidWalker();
     if (config.antiAFK) startAntiAFK();
+    if (config.autoResponder) startAutoResponder();
 }
 
 function startAntiAFK() {
@@ -277,6 +265,10 @@ function startLiquidWalker() {
     }, 1000);
 }
 
+function startAutoResponder() {
+    // Auto-responder is handled in chat event
+}
+
 function createBot() {
     if (!config.serverIp || config.serverIp === 'localhost' || config.serverIp === 'mc.example.com') {
         addLog(`⚠️ Invalid SERVER_IP: "${config.serverIp}". Please set a valid Minecraft server IP.`, 'error');
@@ -285,12 +277,16 @@ function createBot() {
     
     addLog(`🤖 Bot connecting to ${config.serverIp}:${config.serverPort} as "${config.username}"...`, 'info');
     
+    // Unique cache per bot to prevent Microsoft auth conflicts
+    const cacheFolder = path.join(__dirname, `./auth_cache_${config.username.replace(/[^a-z0-9]/gi, '_')}`);
+    
     bot = mineflayer.createBot({
         host: config.serverIp,
         port: config.serverPort,
         username: config.username,
         auth: config.auth,
-        version: '1.20.4'
+        version: '1.20.4',
+        profilesFolder: cacheFolder
     });
 
     bot.on('connect', () => {
@@ -304,7 +300,6 @@ function createBot() {
         addLog('✅ Bot has joined the server!', 'success');
         updatePlayerList();
         
-        // Wait 3 seconds then start features
         setTimeout(() => {
             restartFeatures();
         }, 3000);
@@ -328,12 +323,12 @@ function createBot() {
 
     bot.on('playerJoined', (player) => {
         updatePlayerList();
-        addLog(`📥 Player joined: ${player.username}`, 'info');
+        addLog(`👤 Player joined: ${player.username}`, 'info');
     });
     
     bot.on('playerLeft', (player) => {
         updatePlayerList();
-        addLog(`📤 Player left: ${player.username}`, 'info');
+        addLog(`👤 Player left: ${player.username}`, 'info');
     });
 
     // Chat handler for auto-responses
@@ -341,7 +336,8 @@ function createBot() {
         if (username === bot.username) return;
         addLog(`💬 <${username}> ${message}`, 'info');
         
-        // Check for auto-responses
+        if (!config.autoResponder) return;
+        
         const lowerMsg = message.toLowerCase();
         for (const [keyword, response] of Object.entries(config.chatResponses)) {
             if (lowerMsg.includes(keyword.toLowerCase())) {
@@ -368,8 +364,6 @@ function createBot() {
                 bot = null;
                 createBot();
             }, 10000);
-        } else if (!config.autoReconnect) {
-            addLog(`Auto-reconnect is disabled. Bot will not reconnect.`, 'warning');
         }
     });
 
@@ -405,8 +399,5 @@ function updatePlayerList() {
 addLog(`🚀 Starting NexusBot...`, 'info');
 addLog(`📡 Target: ${config.serverIp}:${config.serverPort}`, 'info');
 addLog(`🤖 Username: ${config.username}`, 'info');
-addLog(`⚙️ Modes: ${config.modes.length ? config.modes.join(', ') : 'None'}`, 'info');
-addLog(`🔄 Auto-Reconnect: ${config.autoReconnect ? 'ON' : 'OFF'}`, 'info');
-addLog(`💤 Anti-AFK: ${config.antiAFK ? 'ON' : 'OFF'}`, 'info');
 
 createBot();
