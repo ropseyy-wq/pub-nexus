@@ -19,10 +19,6 @@
     "SERVER_PORT": {
       "value": "25565",
       "description": "Server port"
-    },
-    "BOT_MODES": {
-      "description": "Comma-separated modes: FARM,MINE,PARKOUR,LIQUID_WALKER",
-      "required": true
     }
   }
 }
