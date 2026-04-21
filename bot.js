@@ -76,7 +76,15 @@ app.get('/health', (req, res) => {
         ping: botStats.ping,
         players: botStats.players,
         inventory: botStats.inventory,
-        blocksMined: botStats.blocksMined
+        blocksMined: botStats.blocksMined,
+        config: {
+            autoReconnect: config.autoReconnect,
+            antiAFK: config.antiAFK,
+            autoFarm: config.autoFarm,
+            autoMine: config.autoMine,
+            parkour: config.parkour,
+            liquidWalker: config.liquidWalker
+        }
     });
 });
 
@@ -116,7 +124,14 @@ app.post('/api/settings', (req, res) => {
         restartFeatures();
     }
     
-    res.json({ success: true, config: { autoReconnect: config.autoReconnect, antiAFK: config.antiAFK, autoFarm: config.autoFarm, autoMine: config.autoMine, parkour: config.parkour, liquidWalker: config.liquidWalker } });
+    res.json({ success: true, config: { 
+        autoReconnect: config.autoReconnect, 
+        antiAFK: config.antiAFK, 
+        autoFarm: config.autoFarm, 
+        autoMine: config.autoMine, 
+        parkour: config.parkour, 
+        liquidWalker: config.liquidWalker 
+    }});
 });
 
 // Update chat responses
@@ -129,16 +144,49 @@ app.post('/api/chat', (req, res) => {
     res.json({ success: true, chatResponses: config.chatResponses });
 });
 
-// Command endpoint
+// Command endpoint (for bot controls)
 app.post('/command', (req, res) => {
     const { command } = req.body;
     if (!command) return res.status(400).json({ error: 'No command' });
-    if (bot && botStats.connected) {
-        bot.chat(command);
-        addLog(`[Command] ${command}`, 'control');
-        res.json({ success: true });
-    } else {
-        res.status(503).json({ error: 'Bot not connected' });
+    
+    addLog(`[Command] ${command}`, 'control');
+    
+    if (command === 'start') {
+        if (!botStats.connected && bot) {
+            addLog('Attempting to start bot...', 'info');
+            createBot();
+        }
+        res.json({ success: true, message: 'Start command received' });
+    } 
+    else if (command === 'stop') {
+        if (bot) {
+            addLog('Stopping bot...', 'warning');
+            clearIntervals();
+            bot.end();
+            bot = null;
+            botStats.connected = false;
+        }
+        res.json({ success: true, message: 'Stop command received' });
+    }
+    else if (command === 'restart') {
+        addLog('Restarting bot...', 'info');
+        if (bot) {
+            clearIntervals();
+            bot.end();
+            bot = null;
+        }
+        botStats.connected = false;
+        reconnectAttempts = 0;
+        setTimeout(() => createBot(), 3000);
+        res.json({ success: true, message: 'Restart command received' });
+    }
+    else {
+        if (bot && botStats.connected) {
+            bot.chat(command);
+            res.json({ success: true, message: 'Command sent to chat' });
+        } else {
+            res.status(503).json({ error: 'Bot not connected' });
+        }
     }
 });
 
@@ -320,6 +368,8 @@ function createBot() {
                 bot = null;
                 createBot();
             }, 10000);
+        } else if (!config.autoReconnect) {
+            addLog(`Auto-reconnect is disabled. Bot will not reconnect.`, 'warning');
         }
     });
 
@@ -328,7 +378,7 @@ function createBot() {
     });
 
     bot.on('kicked', (reason) => {
-        addLog(`👢 Kicked: ${reason}`, 'error');
+        addLog(`👢 Kicked: ${JSON.stringify(reason)}`, 'error');
         botStats.connected = false;
         clearIntervals();
         
@@ -356,5 +406,7 @@ addLog(`🚀 Starting NexusBot...`, 'info');
 addLog(`📡 Target: ${config.serverIp}:${config.serverPort}`, 'info');
 addLog(`🤖 Username: ${config.username}`, 'info');
 addLog(`⚙️ Modes: ${config.modes.length ? config.modes.join(', ') : 'None'}`, 'info');
+addLog(`🔄 Auto-Reconnect: ${config.autoReconnect ? 'ON' : 'OFF'}`, 'info');
+addLog(`💤 Anti-AFK: ${config.antiAFK ? 'ON' : 'OFF'}`, 'info');
 
 createBot();
