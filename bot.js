@@ -1,21 +1,25 @@
-// NEXUSBOT - Minecraft Bot with API Server
-const mineflayer = require('mineflayer');
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
+"use strict";
 
-// Bot configuration - ALL MODES START OFF (controlled via API)
-let config = {
+const mineflayer = require("mineflayer");
+const express = require("express");
+const cors = require("cors");
+const fs = require("fs");
+const path = require("path");
+
+// ============================================================
+// CONFIGURATION
+// ============================================================
+const config = {
     username: process.env.BOT_NAME || 'NexusBot',
     serverIp: process.env.SERVER_IP || 'localhost',
     serverPort: parseInt(process.env.SERVER_PORT) || 25565,
     auth: 'offline',
-    // All features start disabled - can be toggled via API
+    version: process.env.MC_VERSION || '1.20.4',
+    // Features (can be toggled via API)
     autoReconnect: true,
     antiAFK: true,
     autoFarm: false,
     autoMine: false,
-    pvp: false,
     parkour: false,
     liquidWalker: false,
     autoResponder: false,
@@ -33,24 +37,32 @@ let botStats = {
     position: { x: 0, y: 0, z: 0 },
     ping: 0,
     players: [],
-    inventory: [],
     logs: [],
     startTime: Date.now(),
-    blocksMined: 0
+    blocksMined: 0,
+    reconnectAttempts: 0
 };
 
 let bot = null;
-let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 5;
 let activeIntervals = [];
 
+// ============================================================
+// LOGGING
+// ============================================================
 function addLog(message, type = 'info') {
-    const logEntry = { timestamp: new Date().toISOString(), message, type };
+    const logEntry = { 
+        timestamp: new Date().toISOString(), 
+        message: message, 
+        type: type 
+    };
     botStats.logs.push(logEntry);
     if (botStats.logs.length > 200) botStats.logs.shift();
-    console.log(message);
+    console.log(`[${type.toUpperCase()}] ${message}`);
 }
 
+// ============================================================
+// INTERVAL MANAGEMENT
+// ============================================================
 function clearIntervals() {
     activeIntervals.forEach(id => clearInterval(id));
     activeIntervals = [];
@@ -62,7 +74,9 @@ function addInterval(callback, delay) {
     return id;
 }
 
-// API Server
+// ============================================================
+// EXPRESS API SERVER
+// ============================================================
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -77,8 +91,8 @@ app.get('/health', (req, res) => {
         position: botStats.position,
         ping: botStats.ping,
         players: botStats.players,
-        inventory: botStats.inventory,
-        blocksMined: botStats.blocksMined
+        blocksMined: botStats.blocksMined,
+        reconnectAttempts: botStats.reconnectAttempts
     });
 });
 
@@ -87,14 +101,13 @@ app.get('/logs', (req, res) => {
     res.json(botStats.logs.slice(-150));
 });
 
-// Get all settings
+// Get settings
 app.get('/api/settings', (req, res) => {
     res.json({
         autoReconnect: config.autoReconnect,
         antiAFK: config.antiAFK,
         autoFarm: config.autoFarm,
         autoMine: config.autoMine,
-        pvp: config.pvp,
         parkour: config.parkour,
         liquidWalker: config.liquidWalker,
         autoResponder: config.autoResponder,
@@ -104,13 +117,12 @@ app.get('/api/settings', (req, res) => {
 
 // Update settings
 app.post('/api/settings', (req, res) => {
-    const { autoReconnect, antiAFK, autoFarm, autoMine, pvp, parkour, liquidWalker, autoResponder } = req.body;
+    const { autoReconnect, antiAFK, autoFarm, autoMine, parkour, liquidWalker, autoResponder } = req.body;
     
     if (autoReconnect !== undefined) config.autoReconnect = autoReconnect;
     if (antiAFK !== undefined) config.antiAFK = antiAFK;
     if (autoFarm !== undefined) config.autoFarm = autoFarm;
     if (autoMine !== undefined) config.autoMine = autoMine;
-    if (pvp !== undefined) config.pvp = pvp;
     if (parkour !== undefined) config.parkour = parkour;
     if (liquidWalker !== undefined) config.liquidWalker = liquidWalker;
     if (autoResponder !== undefined) config.autoResponder = autoResponder;
@@ -131,7 +143,7 @@ app.post('/api/chat', (req, res) => {
         config.chatResponses = { ...config.chatResponses, ...responses };
         addLog(`Chat responses updated: ${Object.keys(responses).length} rules`, 'success');
     }
-    res.json({ success: true });
+    res.json({ success: true, chatResponses: config.chatResponses });
 });
 
 // Command endpoint
@@ -142,10 +154,10 @@ app.post('/command', (req, res) => {
     addLog(`[Command] ${command}`, 'control');
     
     if (command === 'start') {
-        if (!botStats.connected && bot) {
+        if (!botStats.connected) {
             createBot();
         }
-        res.json({ success: true });
+        res.json({ success: true, message: 'Start command received' });
     } 
     else if (command === 'stop') {
         if (bot) {
@@ -154,7 +166,7 @@ app.post('/command', (req, res) => {
             bot = null;
             botStats.connected = false;
         }
-        res.json({ success: true });
+        res.json({ success: true, message: 'Stop command received' });
     }
     else if (command === 'restart') {
         if (bot) {
@@ -163,14 +175,14 @@ app.post('/command', (req, res) => {
             bot = null;
         }
         botStats.connected = false;
-        reconnectAttempts = 0;
+        botStats.reconnectAttempts = 0;
         setTimeout(() => createBot(), 3000);
-        res.json({ success: true });
+        res.json({ success: true, message: 'Restart command received' });
     }
     else {
         if (bot && botStats.connected) {
             bot.chat(command);
-            res.json({ success: true });
+            res.json({ success: true, message: 'Message sent' });
         } else {
             res.status(503).json({ error: 'Bot not connected' });
         }
@@ -182,7 +194,9 @@ app.listen(PORT, '0.0.0.0', () => {
     addLog(`[API] Server running on port ${PORT}`);
 });
 
-// Bot features
+// ============================================================
+// BOT FEATURES
+// ============================================================
 function restartFeatures() {
     clearIntervals();
     
@@ -191,18 +205,17 @@ function restartFeatures() {
     if (config.parkour) startParkour();
     if (config.liquidWalker) startLiquidWalker();
     if (config.antiAFK) startAntiAFK();
-    if (config.autoResponder) startAutoResponder();
 }
 
 function startAntiAFK() {
     addInterval(() => {
-        if (bot && botStats.connected) {
+        if (bot && botStats.connected && config.antiAFK) {
             try { bot.swingArm(); } catch(e) {}
         }
     }, 15000);
     
     addInterval(() => {
-        if (bot && botStats.connected) {
+        if (bot && botStats.connected && config.antiAFK) {
             try { bot.look(Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.5, true); } catch(e) {}
         }
     }, 10000);
@@ -265,10 +278,9 @@ function startLiquidWalker() {
     }, 1000);
 }
 
-function startAutoResponder() {
-    // Auto-responder is handled in chat event
-}
-
+// ============================================================
+// BOT CONNECTION (STABLE VERSION)
+// ============================================================
 function createBot() {
     if (!config.serverIp || config.serverIp === 'localhost' || config.serverIp === 'mc.example.com') {
         addLog(`⚠️ Invalid SERVER_IP: "${config.serverIp}". Please set a valid Minecraft server IP.`, 'error');
@@ -277,39 +289,52 @@ function createBot() {
     
     addLog(`🤖 Bot connecting to ${config.serverIp}:${config.serverPort} as "${config.username}"...`, 'info');
     
-    // Unique cache per bot to prevent Microsoft auth conflicts
+    // Unique cache folder to prevent Microsoft auth conflicts
     const cacheFolder = path.join(__dirname, `./auth_cache_${config.username.replace(/[^a-z0-9]/gi, '_')}`);
+    if (!fs.existsSync(cacheFolder)) fs.mkdirSync(cacheFolder, { recursive: true });
     
-    bot = mineflayer.createBot({
-        host: config.serverIp,
-        port: config.serverPort,
-        username: config.username,
-        auth: config.auth,
-        version: '1.20.4',
-        profilesFolder: cacheFolder
-    });
-
+    try {
+        bot = mineflayer.createBot({
+            host: config.serverIp,
+            port: config.serverPort,
+            username: config.username,
+            auth: config.auth,
+            version: config.version,
+            profilesFolder: cacheFolder,
+            viewDistance: 'normal',
+            hideErrors: false
+        });
+    } catch (err) {
+        addLog(`❌ Failed to create bot: ${err.message}`, 'error');
+        scheduleReconnect();
+        return;
+    }
+    
     bot.on('connect', () => {
         addLog(`✅ Connected to ${config.serverIp}:${config.serverPort}`, 'success');
-        reconnectAttempts = 0;
     });
-
-    bot.once('spawn', () => {
+    
+    bot.on('spawn', () => {
         botStats.connected = true;
         botStats.startTime = Date.now();
-        addLog('✅ Bot has joined the server!', 'success');
+        botStats.reconnectAttempts = 0;
+        addLog(`✅ Bot has joined the server!`, 'success');
         updatePlayerList();
         
+        // Wait 3 seconds then start features
         setTimeout(() => {
             restartFeatures();
         }, 3000);
     });
-
+    
     bot.on('health', () => {
-        botStats.health = bot.health;
-        botStats.food = bot.food;
+        if (bot) {
+            botStats.health = bot.health;
+            botStats.food = bot.food;
+        }
     });
-
+    
+    // Position tracking
     setInterval(() => {
         if (bot && bot.entity) {
             botStats.position = {
@@ -320,7 +345,7 @@ function createBot() {
             botStats.ping = bot.player?.ping || 0;
         }
     }, 2000);
-
+    
     bot.on('playerJoined', (player) => {
         updatePlayerList();
         addLog(`👤 Player joined: ${player.username}`, 'info');
@@ -330,7 +355,7 @@ function createBot() {
         updatePlayerList();
         addLog(`👤 Player left: ${player.username}`, 'info');
     });
-
+    
     // Chat handler for auto-responses
     bot.on('chat', (username, message) => {
         if (username === bot.username) return;
@@ -351,40 +376,49 @@ function createBot() {
             }
         }
     });
-
+    
     bot.on('end', (reason) => {
         botStats.connected = false;
         addLog(`❌ Disconnected: ${reason || 'Unknown'}`, 'error');
         clearIntervals();
-        
-        if (config.autoReconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-            reconnectAttempts++;
-            addLog(`🔄 Reconnecting in 10 seconds... (Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, 'warning');
-            setTimeout(() => {
-                bot = null;
-                createBot();
-            }, 10000);
-        }
+        scheduleReconnect();
     });
-
+    
     bot.on('error', (err) => {
         addLog(`⚠️ Error: ${err.message}`, 'error');
     });
-
+    
     bot.on('kicked', (reason) => {
-        addLog(`👢 Kicked: ${JSON.stringify(reason)}`, 'error');
+        const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);
+        addLog(`👢 Kicked: ${reasonStr}`, 'error');
         botStats.connected = false;
         clearIntervals();
-        
-        if (config.autoReconnect && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-            reconnectAttempts++;
-            addLog(`🔄 Reconnecting in 15 seconds... (Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, 'warning');
-            setTimeout(() => {
-                bot = null;
-                createBot();
-            }, 15000);
-        }
+        scheduleReconnect();
     });
+}
+
+function scheduleReconnect() {
+    if (!config.autoReconnect) {
+        addLog(`Auto-reconnect is disabled. Bot will not reconnect.`, 'warning');
+        return;
+    }
+    
+    if (botStats.reconnectAttempts >= 10) {
+        addLog(`❌ Max reconnection attempts (10) reached. Bot stopped.`, 'error');
+        return;
+    }
+    
+    botStats.reconnectAttempts++;
+    const delay = Math.min(5000 * botStats.reconnectAttempts, 30000);
+    addLog(`🔄 Reconnecting in ${delay/1000} seconds... (Attempt ${botStats.reconnectAttempts}/10)`, 'warning');
+    
+    setTimeout(() => {
+        if (bot) {
+            try { bot.removeAllListeners(); } catch(e) {}
+            bot = null;
+        }
+        createBot();
+    }, delay);
 }
 
 function updatePlayerList() {
@@ -395,9 +429,13 @@ function updatePlayerList() {
     }
 }
 
-// Start everything
-addLog(`🚀 Starting NexusBot...`, 'info');
+// ============================================================
+// START BOT
+// ============================================================
+addLog(`🚀 Starting NexusBot v2...`, 'info');
 addLog(`📡 Target: ${config.serverIp}:${config.serverPort}`, 'info');
 addLog(`🤖 Username: ${config.username}`, 'info');
+addLog(`🔌 Auth: ${config.auth}`, 'info');
+addLog(`📦 Version: ${config.version}`, 'info');
 
 createBot();
