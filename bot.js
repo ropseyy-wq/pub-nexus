@@ -1,18 +1,20 @@
-// NEXUSBOT - Minecraft Bot with API Server (DELAYED MOVEMENT - ANTI-KICK)
-const mineflayer = require('mineflayer');
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
+// NEXUSBOT - Stable Single Bot (Converted from Multi-Bot)
+const mineflayer = require("mineflayer");
+const express = require("express");
+const cors = require("cors");
+const path = require("path");
+const fs = require("fs");
 
-// Bot configuration
-let config = {
+// ============================================================
+// CONFIGURATION (from Railway environment variables)
+// ============================================================
+const config = {
     username: process.env.BOT_NAME || 'NexusBot',
     serverIp: process.env.SERVER_IP || 'localhost',
     serverPort: parseInt(process.env.SERVER_PORT) || 25565,
     auth: 'offline',
     version: process.env.MC_VERSION || '1.20.4',
-    // Features
+    // Features (can be toggled via API)
     autoReconnect: true,
     antiAFK: true,
     autoFarm: false,
@@ -42,14 +44,25 @@ let botStats = {
 
 let bot = null;
 let activeIntervals = [];
+let lastChatTime = 0;
 
+// ============================================================
+// LOGGING
+// ============================================================
 function addLog(message, type = 'info') {
-    const logEntry = { timestamp: new Date().toISOString(), message, type };
+    const logEntry = { 
+        timestamp: new Date().toISOString(), 
+        message: message, 
+        type: type 
+    };
     botStats.logs.push(logEntry);
     if (botStats.logs.length > 200) botStats.logs.shift();
     console.log(`[${type.toUpperCase()}] ${message}`);
 }
 
+// ============================================================
+// INTERVAL MANAGEMENT
+// ============================================================
 function clearIntervals() {
     activeIntervals.forEach(id => clearInterval(id));
     activeIntervals = [];
@@ -61,12 +74,14 @@ function addInterval(callback, delay) {
     return id;
 }
 
-// API Server
+// ============================================================
+// EXPRESS API SERVER (for your website)
+// ============================================================
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health endpoint
+// Health endpoint - used by your website
 app.get('/health', (req, res) => {
     res.json({
         status: botStats.connected ? 'connected' : 'disconnected',
@@ -81,12 +96,12 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Logs endpoint
+// Logs endpoint - used by your website
 app.get('/logs', (req, res) => {
     res.json(botStats.logs.slice(-150));
 });
 
-// Get settings
+// Get settings - used by your website
 app.get('/api/settings', (req, res) => {
     res.json({
         autoReconnect: config.autoReconnect,
@@ -100,7 +115,7 @@ app.get('/api/settings', (req, res) => {
     });
 });
 
-// Update settings
+// Update settings - used by your website
 app.post('/api/settings', (req, res) => {
     const { autoReconnect, antiAFK, autoFarm, autoMine, parkour, liquidWalker, autoResponder } = req.body;
     
@@ -121,7 +136,7 @@ app.post('/api/settings', (req, res) => {
     res.json({ success: true });
 });
 
-// Update chat responses
+// Update chat responses - used by your website
 app.post('/api/chat', (req, res) => {
     const { responses } = req.body;
     if (responses) {
@@ -131,7 +146,7 @@ app.post('/api/chat', (req, res) => {
     res.json({ success: true });
 });
 
-// Command endpoint
+// Command endpoint - used by your website (start/stop/restart)
 app.post('/command', (req, res) => {
     const { command } = req.body;
     if (!command) return res.status(400).json({ error: 'No command' });
@@ -166,7 +181,7 @@ app.post('/command', (req, res) => {
     }
     else {
         if (bot && botStats.connected) {
-            bot.chat(command);
+            safeBotChat(command);
             res.json({ success: true });
         } else {
             res.status(503).json({ error: 'Bot not connected' });
@@ -174,53 +189,55 @@ app.post('/command', (req, res) => {
     }
 });
 
+// Safe chat with rate limiting
+function safeBotChat(message) {
+    const now = Date.now();
+    const wait = Math.max(0, 1200 - (now - lastChatTime));
+    setTimeout(() => {
+        if (bot && botStats.connected) {
+            bot.chat(message);
+            lastChatTime = Date.now();
+        }
+    }, wait);
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     addLog(`[API] Server running on port ${PORT}`);
 });
 
 // ============================================================
-// BOT FEATURES (WITH DELAYS)
+// BOT FEATURES
 // ============================================================
 function restartFeatures() {
     clearIntervals();
     
-    // Anti-AFK starts immediately (safe)
+    // Anti-AFK starts immediately
     if (config.antiAFK) startAntiAFK();
     
-    // Movement features start with delays (to avoid detection)
-    if (config.autoFarm) {
-        setTimeout(() => startFarming(), 5000);
-    }
-    if (config.autoMine) {
-        setTimeout(() => startMining(), 8000);
-    }
-    if (config.parkour) {
-        setTimeout(() => startParkour(), 10000);
-    }
-    if (config.liquidWalker) {
-        setTimeout(() => startLiquidWalker(), 12000);
-    }
+    // Movement features start with delays
+    if (config.autoFarm) setTimeout(() => startFarming(), 5000);
+    if (config.autoMine) setTimeout(() => startMining(), 8000);
+    if (config.parkour) setTimeout(() => startParkour(), 10000);
+    if (config.liquidWalker) setTimeout(() => startLiquidWalker(), 12000);
 }
 
 function startAntiAFK() {
-    // Gentle anti-AFK - just swing arm, no movement
     addInterval(() => {
         if (bot && botStats.connected && config.antiAFK) {
             try { bot.swingArm(); } catch(e) {}
         }
-    }, 20000); // Slower interval (20 seconds)
+    }, 20000);
     
-    // Look around occasionally (gentle)
     addInterval(() => {
         if (bot && botStats.connected && config.antiAFK) {
             try { bot.look(Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.3, true); } catch(e) {}
         }
-    }, 30000); // Every 30 seconds
+    }, 30000);
 }
 
 function startFarming() {
-    addLog(`🌾 Auto-Farm started (with 5s delay)`, 'info');
+    addLog(`🌾 Auto-Farm started`, 'info');
     addInterval(() => {
         if (!bot || !bot.entity || !botStats.connected || !config.autoFarm) return;
         const crop = bot.findBlock({
@@ -235,12 +252,12 @@ function startFarming() {
                 }
             });
         }
-    }, 8000); // Slower farming (8 seconds)
+    }, 8000);
 }
 
 function startMining() {
     const ores = ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'emerald_ore', 'copper_ore'];
-    addLog(`⛏️ Auto-Mine started (with 8s delay)`, 'info');
+    addLog(`⛏️ Auto-Mine started`, 'info');
     addInterval(() => {
         if (!bot || !bot.entity || !botStats.connected || !config.autoMine) return;
         const ore = bot.findBlock({ matching: (block) => ores.includes(block.name), maxDistance: 4 });
@@ -256,7 +273,7 @@ function startMining() {
 }
 
 function startParkour() {
-    addLog(`🏃 Parkour Mode started (with 10s delay)`, 'info');
+    addLog(`🏃 Parkour Mode started`, 'info');
     addInterval(() => {
         if (!bot || !bot.entity || !botStats.connected || !config.parkour) return;
         bot.setControlState('forward', true);
@@ -265,7 +282,7 @@ function startParkour() {
 }
 
 function startLiquidWalker() {
-    addLog(`🪣 Liquid Walker started (with 12s delay)`, 'info');
+    addLog(`🪣 Liquid Walker started`, 'info');
     addInterval(() => {
         if (!bot || !bot.entity || !botStats.connected || !config.liquidWalker) return;
         const blockBelow = bot.blockAt(bot.entity.position.offset(0, -1, 0));
@@ -280,7 +297,7 @@ function startLiquidWalker() {
 }
 
 // ============================================================
-// BOT CONNECTION
+// BOT CONNECTION (STABLE - from Multi-Bot)
 // ============================================================
 function createBot() {
     if (!config.serverIp || config.serverIp === 'localhost' || config.serverIp === 'mc.example.com') {
@@ -290,7 +307,7 @@ function createBot() {
     
     addLog(`🤖 Bot connecting to ${config.serverIp}:${config.serverPort} as "${config.username}"...`, 'info');
     
-    // Unique cache folder
+    // Unique cache folder to prevent Microsoft auth conflicts
     const cacheFolder = path.join(__dirname, `./auth_cache_${config.username.replace(/[^a-z0-9]/gi, '_')}`);
     if (!fs.existsSync(cacheFolder)) fs.mkdirSync(cacheFolder, { recursive: true });
     
@@ -322,10 +339,9 @@ function createBot() {
         addLog(`✅ Bot has joined the server!`, 'success');
         updatePlayerList();
         
-        // DELAYED START - Wait 8 seconds before doing ANYTHING
+        // Wait 8 seconds then start features
         addLog(`⏳ Waiting 8 seconds before starting features...`, 'info');
         setTimeout(() => {
-            addLog(`🚀 Starting bot features...`, 'info');
             restartFeatures();
         }, 8000);
     });
@@ -435,11 +451,10 @@ function updatePlayerList() {
 // ============================================================
 // START BOT
 // ============================================================
-addLog(`🚀 Starting NexusBot (Delayed Movement Mode)...`, 'info');
+addLog(`🚀 Starting NexusBot (Stable Version)...`, 'info');
 addLog(`📡 Target: ${config.serverIp}:${config.serverPort}`, 'info');
 addLog(`🤖 Username: ${config.username}`, 'info');
 addLog(`🔌 Auth: ${config.auth}`, 'info');
 addLog(`📦 Version: ${config.version}`, 'info');
-addLog(`⏱️ Features will start 8 seconds after spawn to avoid detection`, 'info');
 
 createBot();
