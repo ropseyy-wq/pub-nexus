@@ -1,6 +1,7 @@
-// NEXUSBOT - IDENTICAL to Multi-Bot core (just removed multi-bot features)
+// NEXUSBOT - Fixed with working patterns from v3.0
 const mineflayer = require("mineflayer");
-const { pathfinder, Movements } = require("mineflayer-pathfinder");
+const { pathfinder, Movements, goals } = require("mineflayer-pathfinder");
+const { GoalBlock } = goals;
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -14,7 +15,7 @@ const config = {
     serverIp: process.env.SERVER_IP || 'localhost',
     serverPort: parseInt(process.env.SERVER_PORT) || 25565,
     auth: 'offline',
-    version: process.env.MC_VERSION || '1.21.1',
+    version: process.env.MC_VERSION || false, // false = auto-detect
     autoReconnect: true,
     antiAFK: true,
     autoFarm: false,
@@ -54,9 +55,7 @@ let reconnectTimeoutId = null;
 let isReconnecting = false;
 let lastKickReason = null;
 let connectionTimeoutId = null;
-let isOnGround = true;
-let lastPosition = { x: 0, y: 0, z: 0 };
-let positionStuckCounter = 0;
+let botRunning = true;
 
 // ============================================================
 // LOGGING
@@ -200,190 +199,103 @@ app.listen(PORT, '0.0.0.0', () => {
 // ============================================================
 function restartFeatures() {
     clearIntervals();
-    
-    // Wait 10 seconds before starting any movement features
-    setTimeout(() => {
-        if (config.antiAFK) startAntiAFK();
-        if (config.autoFarm) setTimeout(() => startFarming(), 5000);
-        if (config.autoMine) setTimeout(() => startMining(), 8000);
-        if (config.parkour) setTimeout(() => startParkour(), 10000);
-        if (config.liquidWalker) setTimeout(() => startLiquidWalker(), 12000);
-    }, 10000);
+    if (config.antiAFK) startAntiAFK();
+    if (config.autoFarm) setTimeout(() => startFarming(), 5000);
+    if (config.autoMine) setTimeout(() => startMining(), 8000);
+    if (config.parkour) setTimeout(() => startParkour(), 10000);
+    if (config.liquidWalker) setTimeout(() => startLiquidWalker(), 12000);
 }
 
 function startAntiAFK() {
-    // Safe anti-AFK - only look around and swing arm
+    // Only look around and swing arm - no walking
     addInterval(() => {
         if (bot && botStats.connected && config.antiAFK) {
-            try { 
-                bot.swingArm(); 
-            } catch(e) {}
+            try { bot.swingArm(); } catch(e) {}
         }
     }, 15000);
     
     addInterval(() => {
         if (bot && botStats.connected && config.antiAFK) {
             try { 
-                const yaw = Math.random() * Math.PI * 2;
-                const pitch = (Math.random() - 0.5) * 0.3;
-                bot.look(yaw, pitch, true);
+                bot.look(Math.random() * Math.PI * 2, (Math.random() - 0.5) * 0.5, true);
             } catch(e) {}
         }
-    }, 12000);
+    }, 10000);
 }
 
 function startFarming() {
     addInterval(() => {
         if (!bot || !bot.entity || !botStats.connected || !config.autoFarm) return;
-        
-        // Only farm if on ground and not moving
-        if (!isOnGround) return;
-        
         const crop = bot.findBlock({
             matching: (block) => ['wheat', 'carrots', 'potatoes', 'beetroots'].includes(block.name),
-            maxDistance: 4
+            maxDistance: 5
         });
-        
         if (crop) {
-            // Look at crop first
-            bot.lookAt(crop.position, true, () => {
-                setTimeout(() => {
-                    bot.dig(crop, (err) => {
-                        if (!err) { 
-                            botStats.blocksMined++; 
-                            addLog(`Farmed ${crop.name}`, 'success'); 
-                        }
-                    });
-                }, 500);
+            bot.dig(crop, (err) => {
+                if (!err) { botStats.blocksMined++; addLog(`Farmed ${crop.name}`, 'success'); }
             });
-        }
-    }, 10000);
-}
-
-function startMining() {
-    const ores = ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'emerald_ore', 'copper_ore'];
-    
-    addInterval(() => {
-        if (!bot || !bot.entity || !botStats.connected || !config.autoMine) return;
-        
-        // Only mine if on ground
-        if (!isOnGround) return;
-        
-        const ore = bot.findBlock({ 
-            matching: (block) => ores.includes(block.name), 
-            maxDistance: 4 
-        });
-        
-        if (ore) {
-            // Look at ore first
-            bot.lookAt(ore.position, true, () => {
-                setTimeout(() => {
-                    bot.dig(ore, (err) => {
-                        if (!err) { 
-                            botStats.blocksMined++; 
-                            addLog(`Mined ${ore.name}`, 'success'); 
-                        }
-                    });
-                }, 500);
-            });
-        }
-    }, 12000);
-}
-
-function startParkour() {
-    // Very safe parkour - only tiny jumps
-    addInterval(() => {
-        if (!bot || !bot.entity || !botStats.connected || !config.parkour) return;
-        if (!isOnGround) return;
-        
-        // Only jump if we haven't moved much recently
-        const currentPos = bot.entity.position;
-        const movedDistance = Math.sqrt(
-            Math.pow(currentPos.x - lastPosition.x, 2) +
-            Math.pow(currentPos.z - lastPosition.z, 2)
-        );
-        
-        if (movedDistance < 0.5) {
-            positionStuckCounter++;
-        } else {
-            positionStuckCounter = 0;
-        }
-        
-        // Only do small jump if stuck
-        if (positionStuckCounter > 3) {
-            bot.setControlState('jump', true);
-            setTimeout(() => bot.setControlState('jump', false), 200);
-            positionStuckCounter = 0;
-        }
-        
-        lastPosition = { ...currentPos };
-    }, 5000);
-}
-
-function startLiquidWalker() {
-    addInterval(() => {
-        if (!bot || !bot.entity || !botStats.connected || !config.liquidWalker) return;
-        
-        const blockBelow = bot.blockAt(bot.entity.position.offset(0, -1, 0));
-        if (blockBelow && (blockBelow.name === 'water' || blockBelow.name === 'lava')) {
-            // Only try to place block if we have one
-            const cobble = bot.inventory.findInventoryItem(item => 
-                item && item.name && item.name.includes('cobblestone')
-            );
-            
-            if (cobble) {
-                bot.equip(cobble, 'hand').then(() => {
-                    // Look at the block below
-                    bot.lookAt(blockBelow.position.offset(0, 1, 0), true, () => {
-                        setTimeout(() => {
-                            bot.placeBlock(blockBelow, () => {});
-                        }, 300);
-                    });
-                }).catch(() => {});
-            }
         }
     }, 8000);
 }
 
+function startMining() {
+    const ores = ['coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore', 'emerald_ore', 'copper_ore'];
+    addInterval(() => {
+        if (!bot || !bot.entity || !botStats.connected || !config.autoMine) return;
+        const ore = bot.findBlock({ matching: (block) => ores.includes(block.name), maxDistance: 5 });
+        if (ore) {
+            bot.dig(ore, (err) => {
+                if (!err) { botStats.blocksMined++; addLog(`Mined ${ore.name}`, 'success'); }
+            });
+        }
+    }, 6000);
+}
+
+function startParkour() {
+    // Disabled by default - causes movement kicks
+    addLog('Parkour disabled - use antiAFK instead', 'warning');
+    return;
+}
+
+function startLiquidWalker() {
+    // Disabled by default - causes movement kicks
+    addLog('LiquidWalker disabled - use antiAFK instead', 'warning');
+    return;
+}
+
 // ============================================================
-// KICK ANALYSIS (IDENTICAL to Multi-Bot)
+// KICK ANALYSIS
 // ============================================================
 function analyzeKickReason(reason) {
     const r = (typeof reason === 'string' ? reason : JSON.stringify(reason)).toLowerCase();
-    
     if (r.includes("already connected") || r.includes("proxy"))
         return { label: "Duplicate Session", tip: "Wait 60-90s before reconnecting." };
     if (r.includes("throttl") || r.includes("too fast") || r.includes("wait before"))
         return { label: "Rate Throttled", tip: "Server throttled reconnects. Waiting longer." };
-    if (r.includes("banned")) 
-        return { label: "Banned", tip: "Bot may be banned." };
-    if (r.includes("whitelist")) 
-        return { label: "Not Whitelisted", tip: "Add bot to whitelist." };
+    if (r.includes("banned")) return { label: "Banned", tip: "Bot may be banned." };
+    if (r.includes("whitelist")) return { label: "Not Whitelisted", tip: "Add bot to whitelist." };
     if (r.includes("outdated") || r.includes("version"))
         return { label: "Version Mismatch", tip: "Update Minecraft version." };
     if (r.includes("timeout") || r.includes("timed out"))
         return { label: "Connection Timeout", tip: "Server took too long to respond." };
     if (r.includes("invalid_player_movement"))
-        return { label: "Movement Anti-Cheat", tip: "Server rejected movement packet. Reducing movement speed." };
+        return { label: "Movement Anti-Cheat", tip: "Movement features disabled to prevent kicks." };
     if (r === "" || r.includes("end of stream"))
         return { label: "Server Offline", tip: "Server is sleeping or starting up." };
-    
     return { label: "Unknown Kick", tip: reason || "No reason provided." };
 }
 
 function getReconnectDelay() {
     const r = (lastKickReason || "").toLowerCase();
     if (r.includes("already connected") || r.includes("proxy")) return 65000;
-    if (r.includes("invalid_player_movement")) return 30000; // Wait longer for movement kicks
     if (lastKickReason === "") return 30000;
-    
-    const base = 5000;
-    const max = 45000;
-    return Math.min(base * Math.pow(1.5, botStats.reconnectAttempts), max) + Math.floor(Math.random() * 3000);
+    const base = 3000;
+    const max = 30000;
+    return Math.min(base * Math.pow(2, botStats.reconnectAttempts), max) + Math.floor(Math.random() * 2000);
 }
 
 // ============================================================
-// BOT CONNECTION (IDENTICAL to Multi-Bot core)
+// BOT CONNECTION (FIXED - Using working v3.0 patterns)
 // ============================================================
 function clearBotTimeouts() {
     if (reconnectTimeoutId) { clearTimeout(reconnectTimeoutId); reconnectTimeoutId = null; }
@@ -391,8 +303,9 @@ function clearBotTimeouts() {
 }
 
 function createBot() {
-    if (!config.serverIp || config.serverIp === 'localhost' || config.serverIp === 'mc.example.com') {
-        addLog(`Invalid SERVER_IP: "${config.serverIp}". Please set a valid Minecraft server IP.`, 'error');
+    if (!botRunning) return;
+    if (!config.serverIp || config.serverIp === 'localhost') {
+        addLog(`Invalid SERVER_IP: "${config.serverIp}"`, 'error');
         return;
     }
     
@@ -400,22 +313,17 @@ function createBot() {
     
     addLog(`Connecting to ${config.serverIp}:${config.serverPort} as "${config.username}"...`, 'info');
     
-    const cacheFolder = path.join(__dirname, `./auth_cache_${config.username.replace(/[^a-z0-9]/gi, '_')}`);
-    if (!fs.existsSync(cacheFolder)) fs.mkdirSync(cacheFolder, { recursive: true });
-    
     const botOptions = {
         host: config.serverIp,
         port: config.serverPort,
         username: config.username,
         auth: config.auth,
-        profilesFolder: cacheFolder,
-        viewDistance: 'normal',
+        version: config.version || false,
         hideErrors: false,
-        keepAlive: true,
-        checkTimeoutInterval: 60000
+        keepAlive: false,  // CRITICAL: Prevents keep-alive conflicts
+        checkTimeoutInterval: 600000,
+        viewDistance: 'normal'
     };
-    
-    if (config.version) botOptions.version = config.version;
     
     try {
         bot = mineflayer.createBot(botOptions);
@@ -425,7 +333,7 @@ function createBot() {
         return;
     }
     
-    // CRITICAL: Keep alive handler (SAME as Multi-Bot)
+    // CRITICAL: Keep alive handler
     bot._client.on("keep_alive", packet => {
         try { bot._client.write("keep_alive", { keepAliveId: packet.keepAliveId }); } catch(_) {}
     });
@@ -456,42 +364,25 @@ function createBot() {
         addLog(`Bot has joined the server! Version: ${bot.version}`, 'success');
         updatePlayerList();
         
-        // Initialize position tracking
-        if (bot.entity) {
-            lastPosition = { 
-                x: bot.entity.position.x, 
-                y: bot.entity.position.y, 
-                z: bot.entity.position.z 
-            };
-        }
-        
-        // Setup pathfinder movements
+        // Setup pathfinder movements (SAFE - no auto-walking)
         try {
             const mcData = require('minecraft-data')(bot.version);
             const defaultMove = new Movements(bot, mcData);
-            defaultMove.allowFreeMotion = false;
+            defaultMove.allowFreeMotion = false;  // CRITICAL: Prevents free movement
             defaultMove.canDig = false;
             defaultMove.liquidCost = 1000;
             defaultMove.fallDamageCost = 1000;
-            defaultMove.allowParkour = false;
             bot.pathfinder.setMovements(defaultMove);
-            addLog(`Pathfinder initialized`, 'success');
+            addLog(`Pathfinder initialized (safe mode)`, 'success');
         } catch (err) {
             addLog(`Pathfinder setup failed: ${err.message}`, 'warning');
         }
         
-        // Track ground state
-        bot.on('move', () => {
-            if (bot && bot.entity) {
-                isOnGround = bot.entity.onGround;
-            }
-        });
-        
-        // Start features after a delay
+        // Start features after delay
         setTimeout(() => { 
             restartFeatures();
-            addLog('Features activated with safe movement settings', 'success');
-        }, 8000);
+            addLog('Features activated', 'success');
+        }, 5000);
     });
     
     bot.on('connect', () => {
@@ -513,21 +404,13 @@ function createBot() {
         }
     }, 2000);
     
-    bot.on('playerJoined', (player) => { 
-        updatePlayerList(); 
-        addLog(`Player joined: ${player.username}`, 'info'); 
-    });
-    
-    bot.on('playerLeft', (player) => { 
-        updatePlayerList(); 
-        addLog(`Player left: ${player.username}`, 'info'); 
-    });
+    bot.on('playerJoined', (player) => { updatePlayerList(); addLog(`Player joined: ${player.username}`, 'info'); });
+    bot.on('playerLeft', (player) => { updatePlayerList(); addLog(`Player left: ${player.username}`, 'info'); });
     
     bot.on('chat', (username, message) => {
         if (username === bot.username) return;
         addLog(`<${username}> ${message}`, 'info');
         if (!config.autoResponder) return;
-        
         const lowerMsg = message.toLowerCase();
         for (const [keyword, response] of Object.entries(config.chatResponses)) {
             if (lowerMsg.includes(keyword.toLowerCase())) {
@@ -557,7 +440,7 @@ function createBot() {
         addLog(`Disconnected: ${reason || 'Unknown'}`, 'error');
         botStats.connected = false;
         clearIntervals();
-        scheduleReconnect();
+        if (botRunning) scheduleReconnect();
     });
     
     bot.on('error', (err) => {
@@ -566,10 +449,7 @@ function createBot() {
 }
 
 function scheduleReconnect() {
-    if (!config.autoReconnect) {
-        addLog(`Auto-reconnect is disabled. Bot will not reconnect.`, 'warning');
-        return;
-    }
+    if (!botRunning || !config.autoReconnect) return;
     if (isReconnecting) return;
     
     isReconnecting = true;
@@ -596,7 +476,7 @@ function updatePlayerList() {
 // ============================================================
 // START BOT
 // ============================================================
-addLog(`Starting NexusBot (Safe Movement Version)...`, 'info');
+addLog(`Starting NexusBot (Fixed with v3.0 patterns)...`, 'info');
 addLog(`Target: ${config.serverIp}:${config.serverPort}`, 'info');
 addLog(`Username: ${config.username}`, 'info');
 addLog(`Auth: ${config.auth}`, 'info');
