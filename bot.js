@@ -1,4 +1,4 @@
-// NEXUSBOT - Fixed with PRE-SPAWN Pathfinder (Like Multi-Bot)
+// NEXUSBOT - Stable Bot with Pathfinder
 const mineflayer = require("mineflayer");
 const { pathfinder, Movements } = require("mineflayer-pathfinder");
 const express = require("express");
@@ -43,7 +43,7 @@ let botStats = {
 let bot = null;
 let activeIntervals = [];
 let lastChatTime = 0;
-let movements = null;  // Store movements for later
+let movements = null;
 
 function addLog(message, type = 'info') {
     const logEntry = { timestamp: new Date().toISOString(), message, type };
@@ -228,7 +228,7 @@ function startLiquidWalker() {
     }, 5000);
 }
 
-// Bot Connection (with PRE-SPAWN Pathfinder - Like Multi-Bot)
+// Bot Connection
 function createBot() {
     if (!config.serverIp || config.serverIp === 'localhost' || config.serverIp === 'mc.example.com') {
         addLog(`Invalid SERVER_IP: "${config.serverIp}". Please set a valid Minecraft server IP.`, 'error');
@@ -260,29 +260,8 @@ function createBot() {
         return;
     }
     
-    // CRITICAL: Load pathfinder IMMEDIATELY (before spawn)
+    // Load pathfinder
     bot.loadPlugin(pathfinder);
-    
-    // Setup movements as soon as version is known
-    const setupMovements = () => {
-        try {
-            const mcData = require('minecraft-data')(bot.version);
-            movements = new Movements(bot, mcData);
-            movements.allowFreeMotion = false;  // KEY: Makes movement less detectable
-            bot.pathfinder.setMovements(movements);
-            addLog(`Pathfinder initialized for version ${bot.version}`, 'success');
-        } catch (err) {
-            addLog(`Failed to setup pathfinder: ${err.message}`, 'error');
-        }
-    };
-    
-    // If version is already known, setup immediately
-    if (bot.version) {
-        setupMovements();
-    } else {
-        // Wait for version to be determined
-        bot.once('spawn', setupMovements);
-    }
     
     bot.on('connect', () => {
         addLog(`Connected to ${config.serverIp}:${config.serverPort}`, 'success');
@@ -295,9 +274,15 @@ function createBot() {
         addLog(`Bot has joined the server!`, 'success');
         updatePlayerList();
         
-        // Ensure movements are applied (in case they weren't set yet)
-        if (movements && bot.pathfinder) {
+        // Setup pathfinder movements
+        try {
+            const mcData = require('minecraft-data')(bot.version);
+            movements = new Movements(bot, mcData);
+            movements.allowFreeMotion = false;
             bot.pathfinder.setMovements(movements);
+            addLog(`Pathfinder initialized`, 'success');
+        } catch (err) {
+            addLog(`Pathfinder setup failed: ${err.message}`, 'warning');
         }
         
         setTimeout(() => { restartFeatures(); }, 5000);
