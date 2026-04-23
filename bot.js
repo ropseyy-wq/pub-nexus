@@ -1,4 +1,4 @@
-// NEXUSBOT - Stable Bot (Converted from Multi-Bot)
+// NEXUSBOT - IDENTICAL to Multi-Bot core (just removed multi-bot features)
 const mineflayer = require("mineflayer");
 const { Movements, pathfinder } = require("mineflayer-pathfinder");
 const express = require("express");
@@ -7,7 +7,7 @@ const path = require("path");
 const fs = require("fs");
 
 // ============================================================
-// CONFIGURATION (from Railway environment variables)
+// CONFIGURATION
 // ============================================================
 const config = {
     username: process.env.BOT_NAME || 'NexusBot',
@@ -53,6 +53,7 @@ let chatQueueTimer = null;
 let reconnectTimeoutId = null;
 let isReconnecting = false;
 let lastKickReason = null;
+let connectionTimeoutId = null;
 
 // ============================================================
 // LOGGING
@@ -65,7 +66,7 @@ function addLog(message, type = 'info') {
 }
 
 // ============================================================
-// SAFE CHAT (rate limited)
+// SAFE CHAT
 // ============================================================
 function safeBotChat(message) {
     chatQueue.push(message);
@@ -100,13 +101,12 @@ function addInterval(callback, delay) {
 }
 
 // ============================================================
-// EXPRESS API SERVER (for your website)
+// EXPRESS API SERVER
 // ============================================================
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health endpoint
 app.get('/health', (req, res) => {
     res.json({
         status: botStats.connected ? 'connected' : 'disconnected',
@@ -121,12 +121,10 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Logs endpoint
 app.get('/logs', (req, res) => {
     res.json(botStats.logs.slice(-150));
 });
 
-// Get settings
 app.get('/api/settings', (req, res) => {
     res.json({
         autoReconnect: config.autoReconnect,
@@ -140,7 +138,6 @@ app.get('/api/settings', (req, res) => {
     });
 });
 
-// Update settings
 app.post('/api/settings', (req, res) => {
     const { autoReconnect, antiAFK, autoFarm, autoMine, parkour, liquidWalker, autoResponder } = req.body;
     if (autoReconnect !== undefined) config.autoReconnect = autoReconnect;
@@ -155,7 +152,6 @@ app.post('/api/settings', (req, res) => {
     res.json({ success: true });
 });
 
-// Update chat responses
 app.post('/api/chat', (req, res) => {
     const { responses } = req.body;
     if (responses) {
@@ -165,7 +161,6 @@ app.post('/api/chat', (req, res) => {
     res.json({ success: true });
 });
 
-// Command endpoint
 app.post('/command', (req, res) => {
     const { command } = req.body;
     if (!command) return res.status(400).json({ error: 'No command' });
@@ -273,7 +268,7 @@ function startLiquidWalker() {
 }
 
 // ============================================================
-// KICK ANALYSIS (from Multi-Bot)
+// KICK ANALYSIS (IDENTICAL to Multi-Bot)
 // ============================================================
 function analyzeKickReason(reason) {
     const r = (reason || "").toLowerCase();
@@ -302,8 +297,13 @@ function getReconnectDelay() {
 }
 
 // ============================================================
-// BOT CONNECTION (STABLE - from Multi-Bot)
+// BOT CONNECTION (IDENTICAL to Multi-Bot core)
 // ============================================================
+function clearBotTimeouts() {
+    if (reconnectTimeoutId) { clearTimeout(reconnectTimeoutId); reconnectTimeoutId = null; }
+    if (connectionTimeoutId) { clearTimeout(connectionTimeoutId); connectionTimeoutId = null; }
+}
+
 function createBot() {
     if (!config.serverIp || config.serverIp === 'localhost' || config.serverIp === 'mc.example.com') {
         addLog(`Invalid SERVER_IP: "${config.serverIp}". Please set a valid Minecraft server IP.`, 'error');
@@ -339,13 +339,29 @@ function createBot() {
         return;
     }
     
+    // CRITICAL: Keep alive handler (SAME as Multi-Bot)
+    bot._client.on("keep_alive", packet => {
+        try { bot._client.write("keep_alive", { keepAliveId: packet.keepAliveId }); } catch(_) {}
+    });
+    
     bot.loadPlugin(pathfinder);
+    clearBotTimeouts();
+    
+    connectionTimeoutId = setTimeout(() => {
+        if (!botStats.connected) {
+            addLog(`Connection timeout 150s`, 'error');
+            try { bot.removeAllListeners(); bot.end(); } catch(_) {}
+            bot = null;
+            scheduleReconnect();
+        }
+    }, 150000);
     
     let spawnHandled = false;
     
     bot.once('spawn', () => {
         if (spawnHandled) return;
         spawnHandled = true;
+        clearBotTimeouts();
         lastKickReason = null;
         botStats.connected = true;
         botStats.startTime = Date.now();
@@ -354,13 +370,16 @@ function createBot() {
         addLog(`Bot has joined the server! Version: ${bot.version}`, 'success');
         updatePlayerList();
         
-        // Setup pathfinder movements
+        // Setup pathfinder movements (SAME as Multi-Bot)
         try {
             const mcData = require('minecraft-data')(bot.version);
             const defaultMove = new Movements(bot, mcData);
             defaultMove.allowFreeMotion = false;
             defaultMove.canDig = false;
+            defaultMove.liquidCost = 1000;
+            defaultMove.fallDamageCost = 1000;
             bot.pathfinder.setMovements(defaultMove);
+            addLog(`Pathfinder initialized`, 'success');
         } catch (err) {
             addLog(`Pathfinder setup failed: ${err.message}`, 'warning');
         }
@@ -459,7 +478,7 @@ function updatePlayerList() {
 // ============================================================
 // START BOT
 // ============================================================
-addLog(`Starting NexusBot (Stable Multi-Bot Core)...`, 'info');
+addLog(`Starting NexusBot (Multi-Bot Core)...`, 'info');
 addLog(`Target: ${config.serverIp}:${config.serverPort}`, 'info');
 addLog(`Username: ${config.username}`, 'info');
 addLog(`Auth: ${config.auth}`, 'info');
